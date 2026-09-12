@@ -1,0 +1,126 @@
+import { pgTable, pgEnum } from "drizzle-orm/pg-core";
+import * as t from "drizzle-orm/pg-core";
+import { table_timestamps } from "./helper";
+import { v4 as uuidv4 } from "uuid";
+import { USER_ACCOUNT_PROVIDERS, USER_GENDERS, USER_ROLES } from "@/constants";
+import type { SocialLink } from "@/types";
+
+// ---------------------------------------------------------
+// Enums
+// ---------------------------------------------------------
+export const userRoleEnum = pgEnum("user_role", USER_ROLES);
+export const userGenderRoleEnum = pgEnum("user_gender_role", USER_GENDERS);
+export const userAccountProviderEnum = pgEnum(
+  "user_account_provider",
+  USER_ACCOUNT_PROVIDERS
+);
+
+// ---------------------------------------------------------
+// Users
+// ---------------------------------------------------------
+export const usersTable = pgTable("users", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  email: t.varchar({ length: 255 }).notNull().unique(),
+  username: t.varchar({ length: 100 }).notNull().unique(),
+  password: t.varchar({ length: 255 }),
+  is_verified: t.boolean().notNull().default(false),
+  verify_code: t.varchar({ length: 10 }),
+  verify_expiry: t.timestamp({ withTimezone: true }),
+  role: userRoleEnum().notNull().default("USER"),
+  provider: userAccountProviderEnum().notNull().default("MANUAL"),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User Profiles
+// ---------------------------------------------------------
+export const userProfilesTable = pgTable("user_profiles", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  user_id: t
+    .uuid()
+    .notNull()
+    .unique()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  first_name: t.varchar({ length: 100 }).notNull(),
+  last_name: t.varchar({ length: 100 }),
+  avatar: t.text(),
+  cover_img: t.text(),
+  nickname: t.varchar({ length: 100 }),
+  date_of_birth: t.date(),
+  gender: userGenderRoleEnum(),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User contacts
+// ---------------------------------------------------------
+export const userContactsTable = pgTable("user_contacts", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  user_id: t
+    .uuid()
+    .notNull()
+    .unique()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  socials: t.jsonb().$type<SocialLink[]>().notNull().default([]),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User Phones
+// ---------------------------------------------------------
+export const userPhonesTable = pgTable("user_phones", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  contact_id: t
+    .uuid()
+    .notNull()
+    .references(() => userContactsTable.id, { onDelete: "cascade" }),
+  user_id: t
+    .uuid()
+    .notNull()
+    .unique()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  is_verified: t.boolean().notNull().default(false),
+  verify_code: t.varchar({ length: 10 }),
+  verify_expiry: t.timestamp({ withTimezone: true }),
+  is_primary: t.boolean().notNull().default(false),
+  phone_code: t.varchar({ length: 5 }).notNull(),
+  phone: t.varchar({ length: 20 }).notNull(),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User emails
+// ---------------------------------------------------------
+export const userEmailsTable = pgTable("user_emails", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  contact_id: t
+    .uuid()
+    .notNull()
+    .references(() => userContactsTable.id, { onDelete: "cascade" }),
+  user_id: t
+    .uuid()
+    .notNull()
+    .unique()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  is_verified: t.boolean().notNull().default(false),
+  verify_code: t.varchar({ length: 10 }),
+  verify_expiry: t.timestamp({ withTimezone: true }),
+  is_primary: t.boolean().notNull().default(false),
+  email: t.varchar({ length: 255 }).notNull(),
+  ...table_timestamps,
+});

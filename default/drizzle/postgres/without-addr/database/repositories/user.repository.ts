@@ -1,0 +1,513 @@
+import { getSystemCustomErrorMsgByKey } from "@/events";
+import { ApiError } from "@/libs";
+import {
+ 
+  userContactsTable,
+  userEmailsTable,
+  userPhonesTable,
+  userProfilesTable,
+  usersTable,
+} from "../schemas";
+import { pgDb } from "@/libs/db.connect";
+import { and, eq, getColumns, sql } from "drizzle-orm";
+import bcrypt from "bcryptjs";
+import type {
+
+  CreateUserContactInputType,
+  CreateUserEmailInputType,
+  CreateUserPhoneInputType,
+  CreateUserWithProfileByProviderInputType,
+  CreateUserWithProfileInputType,
+  UpdateContactInputType,
+  UpdateEmailInputType,
+  UpdatePhoneInputType,
+  UpdateProfileInputType,
+} from "@/zod";
+import { validate as isUUID } from "uuid";
+
+// ---------------------------------------------------------
+// Prepared Statements
+// ---------------------------------------------------------
+
+const prepareGetContactPhoneVerifyDetails = pgDb.query.userPhonesTable
+  .findFirst({
+    columns: {
+      id: true,
+      is_verified: true,
+      verify_code: true,
+      verify_expiry: true,
+    },
+    where: {
+      id: { eq: sql.placeholder("phone_id") },
+    },
+  })
+  .prepare("GetContactPhoneVerifyDetails");
+
+const prepareGetContactEmailVerifyDetails = pgDb.query.userEmailsTable
+  .findFirst({
+    columns: {
+      id: true,
+      is_verified: true,
+      verify_code: true,
+      verify_expiry: true,
+    },
+    where: {
+      id: { eq: sql.placeholder("email_table_id") },
+    },
+  })
+  .prepare("GetContactEmailVerifyDetails");
+
+const prepareGetUserIdByEmail = pgDb.query.usersTable
+  .findFirst({
+    columns: {
+      id: true,
+    },
+    where: {
+      email: { eq: sql.placeholder("email") },
+    },
+  })
+  .prepare("GetUserIdByEmail");
+
+const prepareGetAuthUserProfileById = pgDb.query.usersTable
+  .findFirst({
+    columns: {
+      id: true,
+      email: true,
+      username: true,
+      role: true,
+      created_at: true,
+      updated_at: true,
+      is_verified: true,
+      provider: true,
+    },
+    where: {
+      id: { eq: sql.placeholder("id") },
+    },
+    with: {
+      profile: {
+        columns: {
+          first_name: true,
+          last_name: true,
+          avatar: true,
+          cover_img: true,
+          nickname: true,
+          created_at: true,
+          date_of_birth: true,
+          gender: true,
+          updated_at: true,
+        },
+      },
+    },
+  })
+  .prepare("GetAuthUserProfileById");
+
+const prepareGetUserVerifyDetails = pgDb.query.usersTable
+  .findFirst({
+    where: {
+      id: {
+        eq: sql.placeholder("user_id"),
+      },
+    },
+    columns: {
+      id: true,
+      is_verified: true,
+      verify_code: true,
+      verify_expiry: true,
+    },
+  })
+  .prepare("GetUserVerifyDetails");
+
+export class UserRepository {
+  // ---------------------------------------------------------
+  // Create
+  // ---------------------------------------------------------
+  async CreateNewUserAndProfile(data: CreateUserWithProfileInputType) {
+    const { user: user_payload, profile: profile_payload } = data;
+    const result = await pgDb.transaction(async (tx) => {
+      const { password, ...userWithoutPass } = getColumns(usersTable);
+      const [user] = await tx
+        .insert(usersTable)
+        .values(user_payload)
+        .returning(userWithoutPass);
+
+      if (!user?.id) {
+        throw new ApiError(
+          500,
+          getSystemCustomErrorMsgByKey("USER_CREATION_FAILED")
+        );
+      }
+
+      const hashedPassword = await bcrypt.hash(user_payload.password, 10);
+
+      await tx
+        .update(usersTable)
+        .set({ password: hashedPassword })
+        .where(eq(usersTable.id, user.id));
+
+      const [createdUserProfie] = await tx
+        .insert(userProfilesTable)
+        .values({
+          ...profile_payload,
+          user_id: user.id,
+          date_of_birth: profile_payload.date_of_birth
+            ? profile_payload.date_of_birth.toISOString().split("T")[0]
+            : undefined,
+        })
+        .returning();
+
+      if (!createdUserProfie?.id) {
+        throw new ApiError(
+          500,
+          getSystemCustomErrorMsgByKey("PROFILE_CREATION_FAILED")
+        );
+      }
+
+      return { user: user, profile: createdUserProfie };
+    });
+
+    return result;
+  }
+
+  async CreateNewUserAndProfileByProvider(
+    data: CreateUserWithProfileByProviderInputType
+  ) {
+    const { user: user_payload, profile: profile_payload } = data;
+    const result = await pgDb.transaction(async (tx) => {
+      const { password, ...userWithoutPass } = getColumns(usersTable);
+      const [user] = await tx
+        .insert(usersTable)
+        .values(user_payload)
+        .returning(userWithoutPass);
+
+      if (!user?.id) {
+        throw new ApiError(
+          500,
+          getSystemCustomErrorMsgByKey("USER_CREATION_FAILED")
+        );
+      }
+
+      const [createdUserProfie] = await tx
+        .insert(userProfilesTable)
+        .values({
+          ...profile_payload,
+          user_id: user.id,
+          date_of_birth: profile_payload.date_of_birth
+            ? profile_payload.date_of_birth.toISOString().split("T")[0]
+            : undefined,
+        })
+        .returning();
+
+      if (!createdUserProfie?.id) {
+        throw new ApiError(
+          500,
+          getSystemCustomErrorMsgByKey("PROFILE_CREATION_FAILED")
+        );
+      }
+
+      return { ...user, profile: createdUserProfie };
+    });
+
+    return result;
+  }
+
+
+  async CreateNewContact(data: CreateUserContactInputType) {
+    const [newContact] = await pgDb
+      .insert(userContactsTable)
+      .values(data)
+      .returning({ id: userContactsTable.id });
+    return newContact;
+  }
+
+  async CreateNewPhone(data: CreateUserPhoneInputType) {
+    const [newPhone] = await pgDb
+      .insert(userPhonesTable)
+      .values(data)
+      .returning({ id: userPhonesTable.id });
+
+    return newPhone;
+  }
+
+  async CreateNewEmail(data: CreateUserEmailInputType) {
+    const [newEmail] = await pgDb
+      .insert(userEmailsTable)
+      .values(data)
+      .returning({ id: userEmailsTable.id });
+
+    return newEmail;
+  }
+
+  // ---------------------------------------------------------
+  // Read
+  // ---------------------------------------------------------
+
+  async GetContactPhoneVerifyDetails(phone_id: string) {
+    const phone = await prepareGetContactPhoneVerifyDetails.execute({
+      phone_id,
+    });
+    return phone;
+  }
+
+  async GetContactEmailVerifyDetails(email_table_id: string) {
+    const email = await prepareGetContactEmailVerifyDetails.execute({
+      email_table_id,
+    });
+    return email;
+  }
+
+  async GetUserIdByEmail(email: string) {
+    return await prepareGetUserIdByEmail.execute({
+      email,
+    });
+  }
+
+  async GetAuthUserProfileById(id: string) {
+    return await prepareGetAuthUserProfileById.execute({
+      id,
+    });
+  }
+
+  async GetUserDataForLoginByEmailOrUsernameOrId(data: string) {
+    const result = await pgDb.query.usersTable.findFirst({
+      columns: {
+        id: true,
+        email: true,
+        password: true,
+        username: true,
+        role: true,
+        is_verified: true,
+      },
+      with: {
+        profile: {
+          columns: {
+            avatar: true,
+            first_name: true,
+            last_name: true,
+            nickname: true,
+          },
+        },
+      },
+      where: {
+        OR: [
+          {
+            email: { eq: data },
+          },
+          {
+            username: { eq: data },
+          },
+          ...(isUUID(data) ? [{ id: { eq: data } }] : []),
+        ],
+      },
+    });
+    return result;
+  }
+
+  async GetUserVerifyDetails(user_id: string) {
+    const user = await prepareGetUserVerifyDetails.execute({
+      user_id,
+    });
+
+    return user;
+  }
+
+  // ---------------------------------------------------------
+  // Update
+  // ---------------------------------------------------------
+
+  async UpdateUserProfile(data: UpdateProfileInputType) {
+    const { date_of_birth, user_id, ...updateData } = data;
+
+    const [updatedProfile] = await pgDb
+      .update(userProfilesTable)
+      .set({
+        ...updateData,
+        date_of_birth: date_of_birth
+          ? date_of_birth.toISOString().split("T")[0]
+          : undefined,
+      })
+      .where(and(eq(userProfilesTable.user_id, user_id)))
+      .returning({ id: userProfilesTable.id });
+
+    return updatedProfile;
+  }
+
+  async UpdateContact(data: UpdateContactInputType) {
+    const { user_id, ...updateData } = data;
+
+    const [updatedContact] = await pgDb
+      .update(userContactsTable)
+      .set(updateData)
+      .where(eq(userContactsTable.user_id, user_id))
+      .returning({ id: userContactsTable.id });
+
+    return updatedContact;
+  }
+
+  async UpdateUserVerifyDetails(user_id: string) {
+    const [verifiedUser] = await pgDb
+      .update(usersTable)
+      .set({
+        is_verified: true,
+        verify_code: null,
+        verify_expiry: null,
+      })
+      .where(eq(usersTable.id, user_id))
+      .returning({
+        id: usersTable.id,
+      });
+
+    return verifiedUser;
+  }
+
+  async UpdateContactPhone(data: UpdatePhoneInputType) {
+    const { user_id, id, ...updateData } = data;
+
+    const [updatedPhone] = await pgDb
+      .update(userPhonesTable)
+      .set(updateData)
+      .where(
+        and(eq(userPhonesTable.user_id, user_id), eq(userPhonesTable.id, id))
+      )
+      .returning({ id: userPhonesTable.id });
+
+    return updatedPhone;
+  }
+
+  async UpdateContactEmail(data: UpdateEmailInputType) {
+    const { user_id, id, ...updateData } = data;
+
+    const [updatedEmail] = await pgDb
+      .update(userEmailsTable)
+      .set(updateData)
+      .where(
+        and(eq(userEmailsTable.user_id, user_id), eq(userEmailsTable.id, id))
+      )
+      .returning({ id: userEmailsTable.id });
+    return updatedEmail;
+  }
+
+
+  async SetPhoneVerifyCode(
+    code: string,
+    expiry: Date,
+    phone_table_id: string,
+    user_id: string
+  ) {
+    const [updatedPhone] = await pgDb
+      .update(userPhonesTable)
+      .set({
+        verify_code: code,
+        verify_expiry: expiry,
+      })
+      .where(
+        and(
+          eq(userPhonesTable.id, phone_table_id),
+          eq(userPhonesTable.user_id, user_id),
+          eq(userPhonesTable.is_verified, false)
+        )
+      )
+      .returning({
+        id: userPhonesTable.id,
+        phone: userPhonesTable.phone,
+        phone_code: userPhonesTable.phone_code,
+      });
+
+    return updatedPhone;
+  }
+
+  async SetEmailVerifyCode(
+    code: string,
+    expiry: Date,
+    email_table_id: string,
+    user_id: string
+  ) {
+    const [updatedEmail] = await pgDb
+      .update(userEmailsTable)
+      .set({
+        verify_code: code,
+        verify_expiry: expiry,
+      })
+      .where(
+        and(
+          eq(userEmailsTable.id, email_table_id),
+          eq(userEmailsTable.user_id, user_id),
+          eq(userEmailsTable.is_verified, false)
+        )
+      )
+      .returning({ email: userEmailsTable.email, id: userEmailsTable.id });
+
+    return updatedEmail;
+  }
+
+  async SetVerifyCodeForCoreUser(code: string, expiry: Date, email: string) {
+    const [user] = await pgDb
+      .update(usersTable)
+      .set({
+        verify_code: code,
+        verify_expiry: expiry,
+      })
+      .where(eq(usersTable.email, email))
+      .returning({
+        id: usersTable.id,
+      });
+
+    return user;
+  }
+
+  // ---------------------------------------------------------
+  // Delete
+  // ---------------------------------------------------------
+
+  async DeleteUserById(id: string) {
+    const [deletedUser] = await pgDb
+      .delete(usersTable)
+      .where(eq(usersTable.id, id))
+      .returning({ id: usersTable.id });
+
+    return deletedUser;
+  }
+
+  async DeleteSingleContact(contact_id: string, user_id: string) {
+    const [deletedContact] = await pgDb
+      .delete(userContactsTable)
+      .where(
+        and(
+          eq(userContactsTable.id, contact_id),
+          eq(userContactsTable.user_id, user_id)
+        )
+      )
+      .returning({ id: userContactsTable.id });
+
+    return deletedContact;
+  }
+
+  async DeleteSingleContactPhone(phone_id: string, user_id: string) {
+    const [deletedPhone] = await pgDb
+      .delete(userPhonesTable)
+      .where(
+        and(
+          eq(userPhonesTable.id, phone_id),
+          eq(userPhonesTable.user_id, user_id)
+        )
+      )
+      .returning({ id: userPhonesTable.id });
+
+    return deletedPhone;
+  }
+
+  async DeleteSingleContactEmail(email_table_id: string, user_id: string) {
+    const [deletedEmail] = await pgDb
+      .delete(userEmailsTable)
+      .where(
+        and(
+          eq(userEmailsTable.id, email_table_id),
+          eq(userEmailsTable.user_id, user_id)
+        )
+      )
+      .returning({ id: userEmailsTable.id });
+
+    return deletedEmail;
+  }
+
+ 
+}

@@ -1,0 +1,81 @@
+import { pgTable, pgEnum } from "drizzle-orm/pg-core";
+import * as t from "drizzle-orm/pg-core";
+import { table_timestamps } from "./helper";
+import { v4 as uuidv4 } from "uuid";
+import { USER_ACCOUNT_PROVIDERS, USER_GENDERS, USER_ROLES } from "@/constants";
+
+// ---------------------------------------------------------
+// Enums
+// ---------------------------------------------------------
+export const userRoleEnum = pgEnum("user_role", USER_ROLES);
+export const userGenderRoleEnum = pgEnum("user_gender_role", USER_GENDERS);
+export const userAccountProviderEnum = pgEnum(
+  "user_account_provider",
+  USER_ACCOUNT_PROVIDERS
+);
+
+// ---------------------------------------------------------
+// Users
+// ---------------------------------------------------------
+export const usersTable = pgTable("users", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  email: t.varchar({ length: 255 }).notNull().unique(),
+  username: t.varchar({ length: 100 }).notNull().unique(),
+  password: t.varchar({ length: 255 }),
+  is_verified: t.boolean().notNull().default(false),
+  verify_code: t.varchar({ length: 10 }),
+  verify_expiry: t.timestamp({ withTimezone: true }),
+  role: userRoleEnum().notNull().default("USER"),
+  provider: userAccountProviderEnum().notNull().default("MANUAL"),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User Profiles
+// ---------------------------------------------------------
+export const userProfilesTable = pgTable("user_profiles", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  user_id: t
+    .uuid()
+    .notNull()
+    .unique()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  first_name: t.varchar({ length: 100 }).notNull(),
+  last_name: t.varchar({ length: 100 }),
+  avatar: t.text(),
+  cover_img: t.text(),
+  nickname: t.varchar({ length: 100 }),
+  date_of_birth: t.date(),
+  gender: userGenderRoleEnum(),
+  ...table_timestamps,
+});
+
+// ---------------------------------------------------------
+// User Address
+// ---------------------------------------------------------
+export const userAddressesTable = pgTable("user_addresses", {
+  id: t
+    .uuid()
+    .primaryKey()
+    .$defaultFn(() => uuidv4()),
+  user_id: t
+    .uuid()
+    .notNull()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  addr_name: t.varchar({ length: 100 }).notNull(),
+  addr_line_1: t.varchar({ length: 255 }).notNull(),
+  addr_line_2: t.varchar({ length: 255 }),
+  city: t.varchar({ length: 100 }).notNull(),
+  state: t.varchar({ length: 100 }),
+  post_code: t.varchar({ length: 20 }),
+  country: t.varchar({ length: 100 }).notNull(),
+  country_iso: t.varchar({ length: 2 }).notNull(),
+  is_default: t.boolean().notNull().default(false),
+  ...table_timestamps,
+});
